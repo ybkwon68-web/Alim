@@ -34,8 +34,8 @@ def main():
     from web_server import app as web_app
     
     def run_web_server():
-        logger.info("Starting Web Dashboard on http://localhost:5000...")
-        web_app.run(host="0.0.0.0", port=5000, use_reloader=False)
+        logger.info("Starting Web Dashboard on http://localhost:8080...")
+        web_app.run(host="0.0.0.0", port=8080, use_reloader=False)
         
     web_thread = Thread(target=run_web_server, daemon=True)
     web_thread.start()
