@@ -20,6 +20,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             chat_id INTEGER PRIMARY KEY,
             email TEXT,
+            telegram_enabled INTEGER DEFAULT 1,
+            email_enabled INTEGER DEFAULT 1,
+            morning_time TEXT DEFAULT '08:30',
+            lunch_time TEXT DEFAULT '12:30',
+            evening_time TEXT DEFAULT '18:30',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -49,12 +54,51 @@ def init_db():
         )
     """)
     
+    # Create alert_history table (for web audit logs)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alert_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            ticker TEXT,
+            name TEXT,
+            price REAL,
+            pct_change REAL,
+            sentiment TEXT,
+            summary TEXT,
+            channel TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (chat_id) REFERENCES users(chat_id) ON DELETE CASCADE
+        )
+    """)
+    
     # Create index on sent_alerts for performance
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_sent_alerts_key 
         ON sent_alerts(chat_id, item_key)
     """)
     
+    # Run migrations for existing users table if columns are missing
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN telegram_enabled INTEGER DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN email_enabled INTEGER DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN morning_time TEXT DEFAULT '08:30'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN lunch_time TEXT DEFAULT '12:30'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN evening_time TEXT DEFAULT '18:30'")
+    except sqlite3.OperationalError:
+        pass
+        
     conn.commit()
     conn.close()
     logger.info("Database initialized successfully.")
@@ -207,3 +251,100 @@ def clear_old_alerts(days=7):
         logger.error(f"Error clearing old alerts: {e}")
     finally:
         conn.close()
+
+def get_first_user():
+    """
+    Returns the first user in the database. 
+    Seeds a default user with chat_id=12345 if the database is empty.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    user = None
+    try:
+        cursor.execute("SELECT * FROM users LIMIT 1")
+        user = cursor.fetchone()
+        if not user:
+            # Seed a default user configuration
+            cursor.execute(
+                "INSERT INTO users (chat_id, email, telegram_enabled, email_enabled, morning_time, lunch_time, evening_time) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (12345, "your_email@gmail.com", 1, 1, "08:30", "12:30", "18:30")
+            )
+            conn.commit()
+            cursor.execute("SELECT * FROM users LIMIT 1")
+            user = cursor.fetchone()
+    except Exception as e:
+        logger.error(f"Error in get_first_user: {e}")
+    finally:
+        conn.close()
+    return user
+
+def get_user_settings(chat_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    settings = None
+    try:
+        cursor.execute("SELECT email, telegram_enabled, email_enabled, morning_time, lunch_time, evening_time FROM users WHERE chat_id = ?", (chat_id,))
+        row = cursor.fetchone()
+        if row:
+            settings = dict(row)
+    except Exception as e:
+        logger.error(f"Error getting settings for user {chat_id}: {e}")
+    finally:
+        conn.close()
+    return settings
+
+def update_user_settings(chat_id, email, telegram_enabled, email_enabled, morning_time, lunch_time, evening_time):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE users 
+            SET email = ?, telegram_enabled = ?, email_enabled = ?, morning_time = ?, lunch_time = ?, evening_time = ?
+            WHERE chat_id = ?
+        """, (email, telegram_enabled, email_enabled, morning_time, lunch_time, evening_time, chat_id))
+        conn.commit()
+        logger.info(f"Updated settings for user {chat_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error updating settings for user {chat_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+def add_alert_history(chat_id, ticker, name, price, pct_change, sentiment, summary, channel):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO alert_history (chat_id, ticker, name, price, pct_change, sentiment, summary, channel)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (chat_id, ticker, name, price, pct_change, sentiment, summary, channel))
+        conn.commit()
+        logger.info(f"Added alert history for {name} ({ticker}) sent via {channel}")
+        return True
+    except Exception as e:
+        logger.error(f"Error adding alert history: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_alert_history(limit=50):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    history = []
+    try:
+        cursor.execute("""
+            SELECT id, chat_id, ticker, name, price, pct_change, sentiment, summary, channel, created_at
+            FROM alert_history
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+        rows = cursor.fetchall()
+        for row in rows:
+            history.append(dict(row))
+    except Exception as e:
+        logger.error(f"Error getting alert history: {e}")
+    finally:
+        conn.close()
+    return history
+

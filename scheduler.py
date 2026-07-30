@@ -9,6 +9,9 @@ import notifier
 
 logger = logging.getLogger("AlimBot.Scheduler")
 
+# Global reference to scheduler for dynamic rescheduling
+_global_scheduler = None
+
 def process_and_send_user_reports(chat_id, email, schedule_name):
     """
     Collects stock data, filters duplicates, performs AI summarization,
@@ -21,6 +24,15 @@ def process_and_send_user_reports(chat_id, email, schedule_name):
         
     logger.info(f"Processing scheduled report ({schedule_name}) for user {chat_id}...")
     
+    # Load settings
+    settings = database.get_user_settings(chat_id)
+    telegram_enabled = settings.get("telegram_enabled", 1) if settings else 1
+    email_enabled = settings.get("email_enabled", 1) if settings else 1
+    
+    if not telegram_enabled and not email_enabled:
+        logger.info(f"Both alert channels disabled for user {chat_id}. Skipping alerts.")
+        return
+
     summaries = []
     telegram_lines = [f"📅 <b>정기 금융 리포트 ({schedule_name})</b>\n"]
     has_significant_update = False
@@ -56,7 +68,6 @@ def process_and_send_user_reports(chat_id, email, schedule_name):
                 database.mark_alert_sent(chat_id, item_key)
                 
         # 4. Get LLM summary
-        # Even if there is no new news, we still pass quote to summarize the price status
         summary_res = llm_helper.summarize_stock_data(quote, new_disclosures, new_news)
         summary_res.update(quote)
         
@@ -80,25 +91,52 @@ def process_and_send_user_reports(chat_id, email, schedule_name):
             f"• 요약: {summary_res.get('summary_telegram')}\n"
         )
         
-    # Send Telegram Consolidated Alert
+    # Send Reports & Write History
     if summaries:
-        # If there are no important updates, we notify briefly to reduce spam,
-        # but morning alerts are always sent in full.
-        if not has_significant_update and schedule_name != "아침":
-            notifier.send_telegram_message(
-                chat_id, 
-                f"📅 <b>정기 금융 리포트 ({schedule_name})</b>\n\n"
-                "• 관심 종목에 대한 중대한 시세 변동이나 새로운 뉴스/공시가 없습니다. 평온한 상태입니다."
-            )
-        else:
-            telegram_msg = "\n".join(telegram_lines)
-            notifier.send_telegram_message(chat_id, telegram_msg)
-            
-        # Send Email Report (only if email is registered)
-        if email:
-            notifier.send_email_report(email, summaries)
-        else:
-            logger.info(f"User {chat_id} has no registered email. Skipping email report.")
+        # A. Telegram Alert
+        if telegram_enabled:
+            # If there are no important updates, we notify briefly to reduce spam,
+            # but morning alerts are always sent in full.
+            if not has_significant_update and schedule_name != "아침":
+                notifier.send_telegram_message(
+                    chat_id, 
+                    f"📅 <b>정기 금융 리포트 ({schedule_name})</b>\n\n"
+                    "• 관심 종목에 대한 중대한 시세 변동이나 새로운 뉴스/공시가 없습니다. 평온한 상태입니다."
+                )
+            else:
+                telegram_msg = "\n".join(telegram_lines)
+                notifier.send_telegram_message(chat_id, telegram_msg)
+                
+            # Log to History for Telegram
+            for s in summaries:
+                database.add_alert_history(
+                    chat_id=chat_id,
+                    ticker=s["ticker"],
+                    name=s["name"],
+                    price=s["price"],
+                    pct_change=s["pct_change"],
+                    sentiment=s["sentiment"],
+                    summary=s["summary_telegram"],
+                    channel="TELEGRAM"
+                )
+                
+        # B. Email Report
+        if email_enabled and email:
+            if notifier.send_email_report(email, summaries):
+                # Log to History for Email
+                for s in summaries:
+                    database.add_alert_history(
+                        chat_id=chat_id,
+                        ticker=s["ticker"],
+                        name=s["name"],
+                        price=s["price"],
+                        pct_change=s["pct_change"],
+                        sentiment=s["sentiment"],
+                        summary=s["summary_email"],
+                        channel="EMAIL"
+                    )
+        elif email_enabled:
+            logger.info(f"User {chat_id} has email alerts enabled but no email address registered.")
 
 def run_scheduled_job(schedule_name):
     """
@@ -113,41 +151,97 @@ def run_scheduled_job(schedule_name):
         except Exception as e:
             logger.error(f"Error processing scheduled report for user {user['chat_id']}: {e}")
 
+def reload_scheduler_jobs():
+    """
+    Dynamically reschedules the jobs in APScheduler from database settings.
+    """
+    global _global_scheduler
+    if not _global_scheduler:
+        logger.warning("Scheduler is not running. Cannot reload jobs.")
+        return False
+        
+    try:
+        user = database.get_first_user()
+        if not user:
+            return False
+            
+        settings = database.get_user_settings(user["chat_id"])
+        if not settings:
+            return False
+            
+        m_h, m_m = map(int, settings.get("morning_time", "08:30").split(":"))
+        l_h, l_m = map(int, settings.get("lunch_time", "12:30").split(":"))
+        e_h, e_m = map(int, settings.get("evening_time", "18:30").split(":"))
+        
+        # Reschedule Morning
+        _global_scheduler.reschedule_job(
+            "morning_report", 
+            trigger=CronTrigger(day_of_week="mon-fri", hour=m_h, minute=m_m)
+        )
+        # Reschedule Lunch
+        _global_scheduler.reschedule_job(
+            "lunch_report", 
+            trigger=CronTrigger(day_of_week="mon-fri", hour=l_h, minute=l_m)
+        )
+        # Reschedule Evening
+        _global_scheduler.reschedule_job(
+            "evening_report", 
+            trigger=CronTrigger(day_of_week="mon-fri", hour=e_h, minute=e_m)
+        )
+        
+        logger.info(f"Scheduler jobs dynamically rescheduled. Morning: {m_h:02d}:{m_m:02d}, Lunch: {l_h:02d}:{l_m:02d}, Evening: {e_h:02d}:{e_m:02d}")
+        return True
+    except Exception as e:
+        logger.error(f"Error reloading scheduler jobs from database: {e}")
+        return False
+
 def start_scheduler():
     """
-    Initializes and starts the BackgroundScheduler with morning, lunch, and evening times.
+    Initializes and starts the BackgroundScheduler. Loads initial times from database.
     """
-    scheduler = BackgroundScheduler()
+    global _global_scheduler
+    _global_scheduler = BackgroundScheduler()
     
-    # Scheduled times: Morning (08:30), Lunch (12:30), Evening (18:30)
-    # Weekdays Monday to Friday (mon-fri) is standard for stock markets
-    scheduler.add_job(
+    # Load initial settings from DB
+    user = database.get_first_user() # Seeds default if empty
+    settings = database.get_user_settings(user["chat_id"])
+    
+    m_time = settings.get("morning_time", "08:30") if settings else "08:30"
+    l_time = settings.get("lunch_time", "12:30") if settings else "12:30"
+    e_time = settings.get("evening_time", "18:30") if settings else "18:30"
+    
+    m_h, m_m = map(int, m_time.split(":"))
+    l_h, l_m = map(int, l_time.split(":"))
+    e_h, e_m = map(int, e_time.split(":"))
+    
+    # Schedule jobs
+    _global_scheduler.add_job(
         run_scheduled_job,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=8, minute=30),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=m_h, minute=m_m),
         args=["아침"],
         id="morning_report"
     )
-    scheduler.add_job(
+    _global_scheduler.add_job(
         run_scheduled_job,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=12, minute=30),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=l_h, minute=l_m),
         args=["점심"],
         id="lunch_report"
     )
-    scheduler.add_job(
+    _global_scheduler.add_job(
         run_scheduled_job,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=18, minute=30),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=e_h, minute=e_m),
         args=["저녁"],
         id="evening_report"
     )
     
     # Weekly cleanup job (Sunday night) to clear database old logs
-    scheduler.add_job(
+    _global_scheduler.add_job(
         database.clear_old_alerts,
         trigger=CronTrigger(day_of_week="sun", hour=23, minute=0),
         args=[7],
         id="db_cleanup"
     )
     
-    scheduler.start()
-    logger.info("Scheduler started successfully with jobs: Morning (08:30), Lunch (12:30), Evening (18:30)")
-    return scheduler
+    _global_scheduler.start()
+    logger.info(f"Scheduler started successfully. Morning: {m_time}, Lunch: {l_time}, Evening: {e_time}")
+    return _global_scheduler

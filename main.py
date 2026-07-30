@@ -29,6 +29,17 @@ def main():
     # 3. Start Background Scheduler
     sched = scheduler.start_scheduler()
     
+    # 3.5 Start Web Dashboard Server (in a background daemon thread)
+    from threading import Thread
+    from web_server import app as web_app
+    
+    def run_web_server():
+        logger.info("Starting Web Dashboard on http://localhost:5000...")
+        web_app.run(host="0.0.0.0", port=5000, use_reloader=False)
+        
+    web_thread = Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+    
     # 4. Build and Run Telegram Bot
     telegram_app = bot.build_application()
     
