@@ -501,8 +501,13 @@
                 <h1><i class="fa-solid fa-chart-line"></i> 금융 알림 봇 관리 대시보드</h1>
                 <p>관심 종목을 등록하고 실시간 알림 스케줄을 동적으로 관리하세요.</p>
             </div>
-            <div class="status-badge">
-                <i class="fa-solid fa-circle fa-fade"></i> 모니터링 엔진 구동 중
+            <div style="display: flex; gap: 15px; align-items: center;">
+                <button id="btn-trigger-alert" class="btn" style="padding: 8px 16px; font-size: 13.5px; width: auto; background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);">
+                    <i class="fa-solid fa-paper-plane"></i> 즉시 발송
+                </button>
+                <div class="status-badge">
+                    <i class="fa-solid fa-circle fa-fade"></i> 모니터링 엔진 구동 중
+                </div>
             </div>
         </div>
 
@@ -855,6 +860,31 @@
                 showToast(error.message, "error");
             }
         }
+
+        // Trigger manual alert event
+        document.getElementById("btn-trigger-alert").addEventListener("click", async (e) => {
+            const btn = e.currentTarget;
+            const origContent = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 발송 중...';
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch("/api/trigger-alert", {
+                    method: "POST"
+                });
+                
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || "수동 발송 실패");
+                
+                showToast("실시간 요약 및 리포트 즉시 발송을 완료했습니다!");
+                loadAlertHistory();
+            } catch (error) {
+                showToast(error.message, "error");
+            } finally {
+                btn.innerHTML = origContent;
+                btn.disabled = false;
+            }
+        });
 
         // Initial loading sequence
         window.addEventListener("DOMContentLoaded", () => {

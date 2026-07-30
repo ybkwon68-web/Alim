@@ -179,3 +179,16 @@ def get_history():
     except Exception as e:
         logger.error(f"Error fetching history: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/trigger-alert", methods=["POST"])
+def trigger_alert():
+    """
+    Manually triggers the report generation and delivery.
+    """
+    try:
+        scheduler.run_scheduled_job("즉시발송")
+        return jsonify({"message": "수동 즉시 발송이 완료되었습니다."})
+    except Exception as e:
+        logger.error(f"Error triggering manual alert: {e}")
+        return jsonify({"error": str(e)}), 500
+
