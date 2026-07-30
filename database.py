@@ -102,6 +102,78 @@ def init_db():
     conn.commit()
     conn.close()
     logger.info("Database initialized successfully.")
+    
+    # Run automatic dummy user merge to real user on startup
+    merge_dummy_users()
+
+def merge_dummy_users():
+    """
+    Finds real users and merges any dummy configuration data (from web interface tests)
+    into the primary active user's chat_id.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Find all real users (excluding dummy IDs)
+        cursor.execute("SELECT chat_id FROM users WHERE chat_id NOT IN (12345, 123456789) ORDER BY created_at DESC")
+        real_users = cursor.fetchall()
+        if not real_users:
+            return
+            
+        real_id = real_users[0]["chat_id"]
+        
+        # Find any dummy users in the database
+        cursor.execute("SELECT * FROM users WHERE chat_id IN (12345, 123456789)")
+        dummies = cursor.fetchall()
+        for dummy in dummies:
+            dummy_id = dummy["chat_id"]
+            logger.info(f"Merging dummy user configuration {dummy_id} into real active user {real_id}")
+            
+            # 1. Update settings on the real user (copy from dummy if real is unset or default)
+            cursor.execute("SELECT email FROM users WHERE chat_id = ?", (real_id,))
+            real_user_row = cursor.fetchone()
+            real_email = real_user_row["email"] if real_user_row else None
+            
+            email_to_set = dummy["email"] if (not real_email or real_email == "your_email@gmail.com") else real_email
+            
+            cursor.execute("""
+                UPDATE users 
+                SET email = ?,
+                    telegram_enabled = ?,
+                    email_enabled = ?,
+                    morning_time = ?,
+                    lunch_time = ?,
+                    evening_time = ?
+                WHERE chat_id = ?
+            """, (email_to_set, dummy["telegram_enabled"], dummy["email_enabled"], 
+                  dummy["morning_time"], dummy["lunch_time"], dummy["evening_time"], real_id))
+            
+            # 2. Migrate stocks to the real user
+            cursor.execute("SELECT ticker, name, type FROM stocks WHERE chat_id = ?", (dummy_id,))
+            dummy_stocks = cursor.fetchall()
+            for d_stock in dummy_stocks:
+                try:
+                    cursor.execute(
+                        "INSERT INTO stocks (chat_id, ticker, name, type) VALUES (?, ?, ?, ?)",
+                        (real_id, d_stock["ticker"], d_stock["name"], d_stock["type"])
+                    )
+                except sqlite3.IntegrityError:
+                    # Duplicate stock, ignore
+                    pass
+            
+            # 3. Clean up the dummy records from all tables
+            cursor.execute("DELETE FROM users WHERE chat_id = ?", (dummy_id,))
+            cursor.execute("DELETE FROM stocks WHERE chat_id = ?", (dummy_id,))
+            cursor.execute("DELETE FROM sent_alerts WHERE chat_id = ?", (dummy_id,))
+            cursor.execute("DELETE FROM alert_history WHERE chat_id = ?", (dummy_id,))
+            
+        conn.commit()
+        logger.info("Successfully consolidated database users and merged settings.")
+    except Exception as e:
+        logger.error(f"Error merging dummy users: {e}")
+    finally:
+        conn.close()
+
 
 def add_user(chat_id):
     conn = get_db_connection()
@@ -254,15 +326,22 @@ def clear_old_alerts(days=7):
 
 def get_first_user():
     """
-    Returns the first user in the database. 
-    Seeds a default user with chat_id=12345 if the database is empty.
+    Returns the first active user in the database.
+    Prioritizes real Telegram users over dummy configurations,
+    and seeds a default user with chat_id=12345 if the database is entirely empty.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     user = None
     try:
-        cursor.execute("SELECT * FROM users LIMIT 1")
+        # Prioritize real users (not dummy IDs)
+        cursor.execute("SELECT * FROM users WHERE chat_id NOT IN (12345, 123456789) LIMIT 1")
         user = cursor.fetchone()
+        
+        if not user:
+            cursor.execute("SELECT * FROM users LIMIT 1")
+            user = cursor.fetchone()
+            
         if not user:
             # Seed a default user configuration
             cursor.execute(
