@@ -394,10 +394,11 @@ def add_alert_history(chat_id, ticker, name, price, pct_change, sentiment, summa
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
-            INSERT INTO alert_history (chat_id, ticker, name, price, pct_change, sentiment, summary, channel)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (chat_id, ticker, name, price, pct_change, sentiment, summary, channel))
+            INSERT INTO alert_history (chat_id, ticker, name, price, pct_change, sentiment, summary, channel, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (chat_id, ticker, name, price, pct_change, sentiment, summary, channel, now_str))
         conn.commit()
         logger.info(f"Added alert history for {name} ({ticker}) sent via {channel}")
         return True

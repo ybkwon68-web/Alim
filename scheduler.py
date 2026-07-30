@@ -180,17 +180,17 @@ def reload_scheduler_jobs():
         # Reschedule Morning
         _global_scheduler.reschedule_job(
             "morning_report", 
-            trigger=CronTrigger(day_of_week="mon-fri", hour=m_h, minute=m_m)
+            trigger=CronTrigger(day_of_week="mon-fri", hour=m_h, minute=m_m, timezone="Asia/Seoul")
         )
         # Reschedule Lunch
         _global_scheduler.reschedule_job(
             "lunch_report", 
-            trigger=CronTrigger(day_of_week="mon-fri", hour=l_h, minute=l_m)
+            trigger=CronTrigger(day_of_week="mon-fri", hour=l_h, minute=l_m, timezone="Asia/Seoul")
         )
         # Reschedule Evening
         _global_scheduler.reschedule_job(
             "evening_report", 
-            trigger=CronTrigger(day_of_week="mon-fri", hour=e_h, minute=e_m)
+            trigger=CronTrigger(day_of_week="mon-fri", hour=e_h, minute=e_m, timezone="Asia/Seoul")
         )
         
         logger.info(f"Scheduler jobs dynamically rescheduled. Morning: {m_h:02d}:{m_m:02d}, Lunch: {l_h:02d}:{l_m:02d}, Evening: {e_h:02d}:{e_m:02d}")
@@ -204,7 +204,7 @@ def start_scheduler():
     Initializes and starts the BackgroundScheduler. Loads initial times from database.
     """
     global _global_scheduler
-    _global_scheduler = BackgroundScheduler()
+    _global_scheduler = BackgroundScheduler(timezone="Asia/Seoul")
     
     # Load initial settings from DB
     user = database.get_first_user() # Seeds default if empty
@@ -221,19 +221,19 @@ def start_scheduler():
     # Schedule jobs
     _global_scheduler.add_job(
         run_scheduled_job,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=m_h, minute=m_m),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=m_h, minute=m_m, timezone="Asia/Seoul"),
         args=["아침"],
         id="morning_report"
     )
     _global_scheduler.add_job(
         run_scheduled_job,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=l_h, minute=l_m),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=l_h, minute=l_m, timezone="Asia/Seoul"),
         args=["점심"],
         id="lunch_report"
     )
     _global_scheduler.add_job(
         run_scheduled_job,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=e_h, minute=e_m),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=e_h, minute=e_m, timezone="Asia/Seoul"),
         args=["저녁"],
         id="evening_report"
     )
@@ -241,7 +241,7 @@ def start_scheduler():
     # Weekly cleanup job (Sunday night) to clear database old logs
     _global_scheduler.add_job(
         database.clear_old_alerts,
-        trigger=CronTrigger(day_of_week="sun", hour=23, minute=0),
+        trigger=CronTrigger(day_of_week="sun", hour=23, minute=0, timezone="Asia/Seoul"),
         args=[7],
         id="db_cleanup"
     )
