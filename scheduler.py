@@ -95,14 +95,18 @@ def process_and_send_user_reports(chat_id, email, schedule_name):
     if summaries:
         # A. Telegram Alert
         if telegram_enabled:
-            # If there are no important updates, we notify briefly to reduce spam,
-            # but morning alerts are always sent in full.
-            if not has_significant_update and schedule_name != "아침":
-                notifier.send_telegram_message(
-                    chat_id, 
-                    f"📅 <b>정기 금융 리포트 ({schedule_name})</b>\n\n"
-                    "• 관심 종목에 대한 중대한 시세 변동이나 새로운 뉴스/공시가 없습니다. 평온한 상태입니다."
-                )
+            # If there are no important updates, we notify with current prices but omit detailed news/summaries to reduce spam.
+            # Morning reports and manual triggers ("즉시발송") are always sent in full detail.
+            if not has_significant_update and schedule_name not in ("아침", "즉시발송"):
+                lines = [f"📅 <b>정기 금융 리포트 ({schedule_name})</b>\n"]
+                for s in summaries:
+                    sign = "+" if s["change"] > 0 else ""
+                    color = "🔴" if s["change"] > 0 else ("🔵" if s["change"] < 0 else "⚪")
+                    price_formatted = f"{s['price']:,}" if s['currency'] == 'KRW' else f"{s['price']:.2f}"
+                    lines.append(f"{color} <b>{s['name']}</b>: {price_formatted} {s['currency']} ({sign}{s['pct_change']:.2f}%)")
+                lines.append("\n• 중대한 새로운 뉴스나 공시는 없습니다. 평온한 상태입니다.")
+                telegram_msg = "\n".join(lines)
+                notifier.send_telegram_message(chat_id, telegram_msg)
             else:
                 telegram_msg = "\n".join(telegram_lines)
                 notifier.send_telegram_message(chat_id, telegram_msg)
